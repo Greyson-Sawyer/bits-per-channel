@@ -1,0 +1,1352 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="dark">
+<title>Bits per Channel</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Geist:wght@200;400;500;800&family=Geist+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: a single dark screen, centered, like a grading panel. The color patch on the left, a rolling drum of bit depths on the right; below, one line per channel plus luminance, each with a ring that glides between values. Dark only, on purpose: the colors are the light source. */
+:root {
+  --bg: #09090b;
+  --line: #25252b;
+  --line-strong: #45454e;
+  --fg: #f4f4f6;
+  --muted: #7f7f8b;
+  --font-ui: "Geist", ui-sans-serif, system-ui, -apple-system, sans-serif;
+  --font-mono: "Geist Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+  --spring: cubic-bezier(0.3, 1.45, 0.45, 1);
+  --out: cubic-bezier(0.2, 0.8, 0.2, 1);
+  color-scheme: dark;
+}
+
+html { height: 100%; background: var(--bg); transition: background-color 600ms ease; }
+:root.game { --bg: #000; }
+body {
+  transition: background-color 600ms ease;
+  margin: 0;
+  min-height: 100%;
+  box-sizing: border-box;
+  display: flex; align-items: center; justify-content: center;
+  background: var(--bg);
+  color: var(--fg);
+  font-family: var(--font-ui);
+  font-size: 15px;
+  line-height: 1.4;
+  -webkit-font-smoothing: antialiased;
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+  padding-block: clamp(14px, 4vh, 40px);
+}
+.wrap { width: 100%; max-width: 1040px; display: grid; gap: clamp(18px, 5vh, 48px); }
+
+/* Top row: patch and bit depths */
+.top {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: clamp(12px, 2vw, 22px);
+  height: clamp(140px, 32vh, 340px);
+  animation: rise 0.7s var(--out) backwards;
+}
+.patch { position: relative; min-height: 0; container-type: size; }
+.patch.miss { animation: shake 0.45s ease; }
+.glow {
+  position: absolute; inset: 0;
+  border-radius: 40px;
+  filter: blur(80px);
+  opacity: 0.09;
+  transition: background-color 220ms ease;
+  pointer-events: none;
+}
+.lens {                        /* clips the patch so its contents can be magnified inside it */
+  position: absolute; inset: 0;
+  border-radius: 22px;
+  overflow: hidden;
+}
+.lens::after {
+  content: "";
+  position: absolute; inset: 0;
+  border-radius: inherit;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.1);
+  pointer-events: none;
+}
+.stage {                       /* zooming pivots on the dot's right edge and brings it to the center */
+  position: absolute; inset: 0;
+  transform-origin: calc(50% + 15cqh) 50%;
+  transition: transform 700ms var(--out);
+}
+.patch.zoomed .stage { transform: translateX(-15cqh) scale(9); }
+.game .patch { cursor: zoom-in; }
+.game .patch.zoomed { cursor: zoom-out; }
+.swatch {                      /* your color, always the whole patch */
+  position: absolute; inset: 0;
+  transition: background-color 220ms ease;
+}
+.mine {                        /* the target: a small dot in the center, only while playing */
+  position: absolute; inset: 0; margin: auto;
+  width: 30cqh; height: 30cqh;
+  border-radius: 50%;
+  transform: scale(0);
+  transition: transform 600ms var(--out), background-color 400ms ease;
+}
+.game .mine { transform: scale(1); transition: transform 600ms var(--spring), background-color 400ms ease; }
+.ripple {
+  position: absolute; inset: 0; margin: auto;
+  width: 30cqh; height: 30cqh;
+  border-radius: 50%;
+  border: 1.5px solid #fff;
+  box-sizing: border-box;
+  opacity: 0;
+  pointer-events: none;
+}
+.patch.hit .ripple { animation: ripple 0.8s var(--out); }
+.zoom {
+  position: absolute; right: 12px; bottom: 12px;
+  width: 36px; height: 36px;
+  display: grid; place-items: center;
+  border: 0; border-radius: 50%;
+  background: rgba(0, 0, 0, 0.45);
+  color: #fff;
+  cursor: inherit;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 300ms ease, background-color 150ms ease;
+}
+.game .zoom { opacity: 1; pointer-events: auto; }
+.zoom:hover { background: rgba(0, 0, 0, 0.65); }
+.zoom:focus-visible { outline: 2px solid #fff; outline-offset: 2px; }
+.zoom svg { width: 17px; height: 17px; }
+.patch.zoomed .zoom .v { display: none; }
+
+/* Bit depth: a drum of numerals that rolls. Scroll, drag, click a neighbor, or use the arrow keys. */
+.wheel {
+  position: relative;
+  min-width: 0; min-height: 0;
+  container-type: size;
+}
+.hair {
+  position: absolute; left: 8%; right: 8%;
+  height: 1px;
+  background: var(--line);
+  pointer-events: none;
+  transition: background-color 400ms ease, box-shadow 400ms ease;
+}
+.hair.a { top: 34%; }
+.hair.b { top: 66%; }
+.wheel:has(.roll:focus-visible) .hair { background: var(--muted); }
+/* While playing the drum is locked and lit */
+.game .hair { background: rgba(255, 255, 255, 0.8); box-shadow: 0 0 14px rgba(255, 255, 255, 0.55); }
+.game .roll { pointer-events: none; }
+.game .w-item .n { animation: breathe 2.4s ease-in-out infinite; }
+.roll {
+  height: 100%;
+  box-sizing: border-box;
+  padding-block: 35cqh;
+  overflow-x: hidden; overflow-y: auto;
+  scroll-snap-type: y mandatory;
+  overscroll-behavior: contain;
+  scrollbar-width: none;
+  outline: none;
+  cursor: grab;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-mask-image: linear-gradient(to bottom, transparent 0%, #000 26%, #000 74%, transparent 100%);
+  mask-image: linear-gradient(to bottom, transparent 0%, #000 26%, #000 74%, transparent 100%);
+}
+.roll::-webkit-scrollbar { display: none; }
+.roll.dragging { cursor: grabbing; }
+.w-item {
+  height: 30cqh;
+  scroll-snap-align: center;
+  display: grid;
+  grid-template-columns: 30% max-content minmax(0, 1fr);
+  cursor: pointer;
+  align-items: baseline; align-content: center;
+  column-gap: clamp(10px, 1.6vw, 20px);
+  perspective: 480px;
+}
+.w-item .n {
+  grid-column: 2;
+  font-weight: 200;
+  font-size: 28cqh;
+  line-height: 1;
+  letter-spacing: -0.04em;
+  font-variant-numeric: tabular-nums;
+  will-change: transform, opacity;
+}
+.w-item .u {
+  grid-column: 3;
+  font-size: 10.5px; font-weight: 500;
+  letter-spacing: 0.18em; text-transform: uppercase;
+  white-space: nowrap;
+  color: var(--muted);
+}
+.w-item.play .n { font-size: 19cqh; letter-spacing: -0.02em; }
+
+/* Game bar: folds open under the rows while playing */
+.lower { display: grid; }
+.actions {
+  display: grid;
+  grid-template-rows: 0fr;
+  opacity: 0;
+  transition: grid-template-rows 500ms var(--out), opacity 400ms ease;
+}
+.game .actions { grid-template-rows: 1fr; opacity: 1; }
+.actions-in { min-height: 0; overflow: hidden; }
+.actions-row {
+  display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap;
+  gap: 12px 20px;
+  padding: clamp(10px, 2.6vh, 24px) 4px 4px;
+}
+.tag {
+  font-size: 12px; font-weight: 500;
+  letter-spacing: 0.22em; text-transform: uppercase;
+  color: var(--fg);
+  text-shadow: 0 0 16px rgba(255, 255, 255, 0.45);
+}
+.btns { display: inline-flex; align-items: center; gap: 6px; margin-left: auto; }
+.btn {
+  font: 500 12px/1 var(--font-ui);
+  letter-spacing: 0.16em; text-transform: uppercase;
+  padding: 13px 22px;
+  border: 0; border-radius: 999px;
+  cursor: pointer;
+  transition: background-color 150ms ease, color 150ms ease, transform 150ms var(--out);
+}
+.btn:active { transform: scale(0.96); }
+.btn:focus-visible { outline: 2px solid var(--fg); outline-offset: 2px; }
+.btn.primary { background: var(--fg); color: #000; }
+.btn.primary:hover { background: #fff; }
+.btn.ghost { background: transparent; color: var(--muted); }
+.btn.ghost:hover { color: var(--fg); }
+
+/* Rows: three channels and luminance */
+.chans { display: grid; gap: clamp(4px, 1.6vh, 18px); }
+.chan {
+  display: grid;
+  grid-template-columns: 64px minmax(0, 1fr) auto;
+  grid-template-areas: "name stops step";
+  column-gap: clamp(10px, 2vw, 24px);
+  align-items: center;
+  animation: rise 0.7s var(--out) backwards;
+}
+.chan:nth-child(1) { animation-delay: 80ms; }
+.chan:nth-child(2) { animation-delay: 140ms; }
+.chan:nth-child(3) { animation-delay: 200ms; }
+.chan:nth-child(4) { animation-delay: 260ms; }
+.chan-name {
+  grid-area: name;
+  font-size: 12px; font-weight: 500;
+  letter-spacing: 0.14em; text-transform: uppercase;
+  color: var(--muted);
+}
+
+.stepper { grid-area: step; display: inline-flex; align-items: center; gap: 2px; }
+.stepper .num {
+  font: 500 22px/1 var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  min-width: 3.1ch;
+  text-align: center;
+}
+.arrow {
+  width: 34px; height: 34px;
+  display: inline-grid; place-items: center;
+  border: 0; border-radius: 50%;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  transition: background-color 150ms ease, color 150ms ease, opacity 150ms ease, transform 150ms var(--out);
+}
+.arrow:hover:not(:disabled) { color: var(--fg); background: rgba(255, 255, 255, 0.08); }
+.arrow:active:not(:disabled) { transform: scale(0.9); }
+.arrow:disabled { opacity: 0.25; cursor: default; }
+.arrow:focus-visible { outline: 2px solid var(--fg); outline-offset: 1px; }
+.arrow svg { width: 14px; height: 14px; }
+
+/* Value row: one cell per possible value */
+.stops {
+  grid-area: stops;
+  position: relative;
+  display: grid;
+  grid-template-columns: repeat(var(--n), minmax(0, 1fr));
+  height: 48px;
+  cursor: pointer;
+  touch-action: pan-y;
+  user-select: none;
+  -webkit-user-select: none;
+}
+.stops::before {              /* the thin line joining every value */
+  content: "";
+  position: absolute;
+  left: calc(var(--cell) / 2); right: calc(var(--cell) / 2);
+  top: 50%; height: 1px; margin-top: -0.5px;
+  background: var(--line);
+}
+.fill {                        /* brighter line up to the chosen value */
+  position: absolute;
+  left: calc(var(--cell) / 2);
+  width: calc(var(--cell) * var(--v));
+  top: 50%; height: 2px; margin-top: -1px;
+  border-radius: 1px;
+  background: linear-gradient(to right, transparent, var(--glow));
+  transition: width 260ms var(--out);
+  pointer-events: none;
+}
+.stop {
+  position: relative;
+  display: grid; place-items: center;
+  min-width: 0;
+  padding: 0; margin: 0;
+  border: 0; background: transparent;
+  cursor: pointer;
+}
+.stop:focus { outline: none; }
+.dot {                         /* an empty ring; only the chosen one is filled with its color */
+  width: var(--d); height: var(--d);
+  border-radius: 50%;
+  background: var(--bg);
+  box-shadow: inset 0 0 0 1.5px rgba(255, 255, 255, 0.26);
+  transition: transform 240ms var(--spring), background-color 200ms ease, box-shadow 200ms ease;
+  animation: pop 0.4s var(--spring) backwards;
+  animation-delay: calc(var(--i) * var(--stagger));
+}
+.stop:hover .dot { transform: scale(1.14); box-shadow: inset 0 0 0 1.5px rgba(255, 255, 255, 0.5); }
+.stop.on .dot { transform: scale(1.3); background: var(--c); box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.16); }
+
+.halo {                        /* ring that glides to the chosen value */
+  position: absolute; left: 0; top: 50%;
+  width: var(--h); height: var(--h);
+  border-radius: 50%;
+  border: 1.5px solid var(--fg);
+  box-sizing: border-box;
+  box-shadow: 0 0 22px -1px var(--glow), inset 0 0 10px -4px var(--glow);
+  transform: translate(calc(var(--cell) * var(--v) + var(--cell) / 2 - 50%), -50%);
+  transition: transform 300ms var(--spring), box-shadow 220ms ease;
+  pointer-events: none;
+}
+.stops:has(.stop:focus-visible) .halo { outline: 2px solid rgba(255, 255, 255, 0.45); outline-offset: 3px; }
+
+/* Too many values for circles: a ruler of ticks with a playhead */
+.stops.ticks::before { top: auto; bottom: 6px; left: 0; right: 0; }
+.stops.ticks .fill { display: none; }
+.stops.ticks .stop { place-items: end center; padding-bottom: 7px; }
+.stops.ticks .dot {
+  width: var(--tw); height: 16px;
+  border-radius: 1px;
+  background: var(--line-strong);
+  box-shadow: none;
+  transform-origin: bottom;
+  animation-name: grow;
+  animation-timing-function: var(--out);
+}
+.stops.ticks .stop.major .dot { height: 25px; }
+.stops.ticks .stop:hover .dot,
+.stops.ticks .stop.on .dot { transform: none; box-shadow: none; }
+.stops.ticks .stop:hover .dot { background: var(--muted); }
+.stops.ticks .stop.on .dot { background: var(--c); }
+.stops.ticks .halo {
+  top: 0;
+  width: 2px; height: calc(100% - 6px);
+  border: 0; border-radius: 1px;
+  background: var(--fg);
+  box-shadow: 0 0 14px 1px var(--glow);
+  transform: translate(calc(var(--cell) * var(--v) + var(--cell) / 2 - 50%), 0);
+  transition: transform 160ms var(--out), box-shadow 220ms ease;
+}
+.stops.ticks .halo::before {
+  content: "";
+  position: absolute; top: -1px; left: 50%;
+  width: 9px; height: 9px; margin-left: -4.5px;
+  border-radius: 50%;
+  background: var(--glow);      /* the playhead's cap carries the chosen value's color */
+  box-shadow: 0 0 0 1.5px var(--fg);
+  transition: background-color 200ms ease;
+}
+
+/* Offset: always a continuous slider. Same thin rail as the rows above, running between the same two end points,
+   with a tall narrow fader cap like one on a mixing desk */
+.stops.cont { display: block; outline: none; cursor: ew-resize; }
+.stops.cont .fill { width: calc((100% - var(--cell)) * var(--y)); }
+.fader {
+  position: absolute; top: 4px; bottom: 4px;
+  left: calc(var(--cell) / 2 + (100% - var(--cell)) * var(--y));
+  width: 14px; margin-left: -7px;
+  border-radius: 3px;
+  background: linear-gradient(to right, #b9b9c1, #f6f6f8 30%, #ffffff 50%, #f6f6f8 70%, #b9b9c1);
+  box-shadow: 0 3px 10px rgba(0, 0, 0, 0.75), inset 0 0 0 1px rgba(0, 0, 0, 0.3), inset 0 1px 0 rgba(255, 255, 255, 0.9);
+  transition: left 260ms var(--out);
+}
+.fader::after {                /* the grip line down the middle of the cap */
+  content: "";
+  position: absolute; left: 50%; top: 22%; bottom: 22%;
+  width: 2px; margin-left: -1px;
+  border-radius: 1px;
+  background: rgba(0, 0, 0, 0.6);
+}
+.stops.cont.dragging .fader { transition: none; }
+.stops.cont:focus-visible .fader { outline: 2px solid rgba(255, 255, 255, 0.55); outline-offset: 3px; }
+
+/* Vertical orientation (phones): same rows turned into side-by-side faders, value 0 at the bottom */
+.stops.vert {
+  display: flex; flex-direction: column-reverse;
+  touch-action: none;
+  height: 100%;
+}
+.stops.vert .stop { flex: 1; min-height: 0; }
+.stops.vert::before {
+  left: 50%; right: auto; width: 1px; margin: 0 0 0 -0.5px;
+  top: calc(var(--cell) / 2); bottom: calc(var(--cell) / 2); height: auto;
+}
+.stops.vert .fill {
+  left: 50%; width: 2px; margin: 0 0 0 -1px;
+  top: auto; bottom: calc(var(--cell) / 2);
+  height: calc(var(--cell) * var(--v));
+  background: linear-gradient(to top, transparent, var(--glow));
+  transition: height 260ms var(--out);
+}
+.stops.vert .halo {
+  left: 50%; top: auto;
+  bottom: calc(var(--cell) * var(--v) + var(--cell) / 2);
+  transform: translate(-50%, 50%);
+  transition: bottom 300ms var(--spring), box-shadow 220ms ease;
+}
+/* ticks variant, rotated: ruler on the right edge, horizontal playhead */
+.stops.vert.ticks::before { left: auto; right: 6px; top: 0; bottom: 0; width: 1px; height: auto; margin: 0; }
+.stops.vert.ticks .stop { place-items: center end; padding: 0 7px 0 0; }
+.stops.vert.ticks .dot { width: 16px; height: var(--tw); transform-origin: right; animation-name: growx; }
+.stops.vert.ticks .stop.major .dot { width: 25px; height: var(--tw); }
+.stops.vert.ticks .halo {
+  top: auto; left: 0; right: 6px; width: auto; height: 2px;
+  bottom: calc(var(--cell) * var(--v) + var(--cell) / 2);
+  transform: translateY(50%);
+  transition: bottom 160ms var(--out), box-shadow 220ms ease;
+}
+.stops.vert.ticks .halo::before { top: 50%; left: auto; right: -1px; margin: -4.5px 0 0 0; }
+/* the offset fader, upright: horizontal cap on a vertical rail */
+.stops.vert.cont { cursor: ns-resize; }
+.stops.vert.cont .fill { height: calc((100% - var(--cell)) * var(--y)); width: 2px; }
+.stops.vert.cont .fader {
+  top: auto; left: 50%; right: auto;
+  bottom: calc(var(--cell) / 2 + (100% - var(--cell)) * var(--y));
+  width: 46px; height: 14px; margin: 0;
+  transform: translate(-50%, 50%);
+  background: linear-gradient(to bottom, #b9b9c1, #f6f6f8 30%, #ffffff 50%, #f6f6f8 70%, #b9b9c1);
+  transition: bottom 260ms var(--out);
+}
+.stops.vert.cont .fader::after { left: 22%; right: 22%; top: 50%; bottom: auto; width: auto; height: 2px; margin: -1px 0 0 0; }
+.stops.vert.cont.dragging .fader { transition: none; }
+/* rail mode (phones, 4 and 8 bits): a proper fader, same cap as the Offset row, snapping to levels */
+.stops.vert.rail { display: block; cursor: ns-resize; }
+.stops.vert.rail::before { width: 3px; margin-left: -1.5px; border-radius: 2px; }
+.stops.vert.rail .fill { width: 3px; margin-left: -1.5px; border-radius: 2px; }
+.stops.vert.rail .fader {
+  position: absolute; top: auto; left: 50%; right: auto;
+  bottom: calc(var(--cell) * var(--v) + var(--cell) / 2);
+  width: 46px; height: 14px; margin: 0;
+  border-radius: 3px;
+  transform: translate(-50%, 50%);
+  background: linear-gradient(to bottom, #b9b9c1, #f6f6f8 30%, #ffffff 50%, #f6f6f8 70%, #b9b9c1);
+  box-shadow: 0 3px 10px rgba(0, 0, 0, 0.75), inset 0 0 0 1px rgba(0, 0, 0, 0.3), inset 0 1px 0 rgba(255, 255, 255, 0.9);
+  transition: bottom 160ms var(--out);
+}
+.stops.vert.rail .fader::after {
+  content: "";
+  position: absolute; left: 22%; right: 22%; top: 50%;
+  height: 2px; margin-top: -1px; border-radius: 1px;
+  background: rgba(0, 0, 0, 0.6);
+}
+
+/* Settings: a small gear in the corner that opens a panel of switches */
+[hidden] { display: none !important; }
+.settings {
+  position: fixed; z-index: 20;
+  top: calc(10px + env(safe-area-inset-top, 0px));
+  right: max(12px, env(safe-area-inset-right, 0px));
+}
+.gear {
+  width: 36px; height: 36px;
+  display: grid; place-items: center;
+  margin-left: auto;
+  border: 0; border-radius: 50%;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  transition: color 150ms ease, background-color 150ms ease, transform 400ms var(--out);
+}
+.gear:hover, .gear[aria-expanded="true"] { color: var(--fg); background: rgba(255, 255, 255, 0.08); }
+.gear[aria-expanded="true"] { transform: rotate(60deg); }
+.gear:focus-visible { outline: 2px solid var(--fg); outline-offset: 1px; }
+.gear svg { width: 19px; height: 19px; }
+.settings-panel {
+  position: absolute; top: 44px; right: 0;
+  width: min(320px, calc(100vw - 24px));
+  box-sizing: border-box;
+  display: grid; gap: 14px;
+  padding: 16px 18px 18px;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: #141417;
+  box-shadow: 0 18px 50px rgba(0, 0, 0, 0.7);
+  animation: rise 0.25s var(--out);
+}
+.settings-title {
+  font-size: 11px; font-weight: 500;
+  letter-spacing: 0.18em; text-transform: uppercase;
+  color: var(--muted);
+}
+.setting { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+.setting-text { display: grid; gap: 3px; min-width: 0; }
+.setting-name { font-size: 14px; color: var(--fg); }
+.setting-note { font-size: 12.5px; color: var(--muted); }
+.switch {
+  flex: none;
+  position: relative;
+  width: 40px; height: 24px;
+  padding: 0;
+  border: 0; border-radius: 12px;
+  background: var(--line-strong);
+  cursor: pointer;
+  transition: background-color 200ms ease;
+}
+.switch span {
+  position: absolute; top: 3px; left: 3px;
+  width: 18px; height: 18px;
+  border-radius: 50%;
+  background: var(--fg);
+  transition: transform 220ms var(--spring), background-color 200ms ease;
+}
+.switch[aria-checked="true"] { background: var(--fg); }
+.switch[aria-checked="true"] span { transform: translateX(16px); background: #000; }
+.switch:focus-visible { outline: 2px solid var(--fg); outline-offset: 2px; }
+
+/* Jackpot headline: lands over a dark veil, holds, fades */
+.banner {
+  position: fixed; inset: 0; z-index: 30;
+  display: grid; place-items: center;
+  pointer-events: none;
+  isolation: isolate;
+  visibility: hidden;
+}
+.banner.show { visibility: visible; }
+.banner::before {
+  content: "";
+  position: absolute; inset: 0;
+  background: radial-gradient(closest-side, rgba(0, 0, 0, 0.88), rgba(0, 0, 0, 0.45));
+  opacity: 0;
+}
+.banner.show::before { animation: veil 2.3s ease forwards; }
+.banner-text {
+  position: relative;
+  display: grid;
+  font-weight: 800;
+  font-size: clamp(30px, 8.6vw, 112px);
+  line-height: 0.95;
+  letter-spacing: -0.02em;
+  text-transform: uppercase;
+  white-space: nowrap;
+  color: #fff;
+  opacity: 0;
+}
+.banner.show .banner-text { animation: land 2.3s var(--out) forwards; }
+#confetti { position: fixed; inset: 0; width: 100%; height: 100%; z-index: 40; pointer-events: none; }
+
+@keyframes rise { from { opacity: 0; transform: translateY(10px); } }
+@keyframes pop { from { opacity: 0; transform: scale(0.2); } }
+@keyframes grow { from { opacity: 0; transform: scaleY(0); } }
+@keyframes growx { from { opacity: 0; transform: scaleX(0); } }
+@keyframes breathe {
+  0%, 100% { text-shadow: 0 0 18px rgba(255, 255, 255, 0.35); }
+  50% { text-shadow: 0 0 34px rgba(255, 255, 255, 0.8), 0 0 6px rgba(255, 255, 255, 0.5); }
+}
+@keyframes ripple { from { opacity: 0.9; transform: scale(1); } to { opacity: 0; transform: scale(3.4); } }
+@keyframes shake {
+  20% { transform: translateX(-7px); }
+  40% { transform: translateX(6px); }
+  60% { transform: translateX(-4px); }
+  80% { transform: translateX(2px); }
+}
+@keyframes veil { 0% { opacity: 0; } 14% { opacity: 1; } 72% { opacity: 1; } 100% { opacity: 0; } }
+@keyframes land {
+  0% { opacity: 0; transform: scale(1.35); }
+  20% { opacity: 1; transform: none; }
+  72% { opacity: 1; transform: none; }
+  100% { opacity: 0; transform: scale(0.97); }
+}
+
+@media (max-width: 600px) {
+  body { align-items: flex-start; padding-block: 8px 24px; }
+  .wrap { gap: 12px; }
+
+  /* Swatch + drum become a compact sticky header: the color stays visible while the rows scroll under it */
+  .top {
+    position: sticky; top: 0;
+    z-index: 10;
+    grid-template-columns: minmax(0, 1fr) 116px;
+    height: 148px;
+    gap: 10px;
+    background: var(--bg);
+    padding-top: max(2px, env(safe-area-inset-top, 0px));
+    padding-bottom: 10px;
+    box-shadow: 0 22px 16px -16px var(--bg);
+    transition: background-color 600ms ease;
+  }
+  .game .top { background: #000; }
+  .lens, .glow { border-radius: 16px; }
+
+  /* Narrow drum: numeral only, with a fixed caption underneath */
+  .w-item { grid-template-columns: minmax(0, 1fr); justify-items: center; column-gap: 0; }
+  .w-item .n { grid-column: 1; }
+  .w-item .u { display: none; }
+  .wheel::after {
+    content: "bits / channel";
+    position: absolute; left: 0; right: 0; bottom: 0;
+    text-align: center;
+    font-size: 9px; font-weight: 500;
+    letter-spacing: 0.18em; text-transform: uppercase;
+    color: var(--muted);
+    pointer-events: none;
+  }
+
+  /* Four vertical faders side by side, filling the screen below the header; submit always fits beneath */
+  .chans {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 10px;
+    height: max(240px, calc(100vh - 330px));
+    height: max(240px, calc(100dvh - 310px));
+    align-items: stretch;
+  }
+  .chan {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto minmax(0, 1fr) auto auto;
+    grid-template-areas: "step" "stops" "zero" "name";
+    row-gap: 6px;
+    justify-items: center;
+  }
+  .chan-name { font-size: 10px; letter-spacing: 0.12em; }
+
+  /* No steppers on phones: the scale's two ends instead — max above, 0 below */
+  .stepper { display: none; }
+  .chan::before, .chan::after {
+    font: 500 12px/1 var(--font-mono);
+    font-variant-numeric: tabular-nums;
+    color: var(--muted);
+  }
+  .chan::before { content: attr(data-max); grid-area: step; }
+  .chan::after { content: "0"; grid-area: zero; }
+
+  /* Heat control: the 80px blur glow and the breathing text-shadow repaint every frame — phones skip both */
+  .glow { display: none; }
+  .game .w-item .n { animation: none; }
+
+  .zoom { width: 32px; height: 32px; right: 8px; bottom: 8px; }
+  .actions-row { padding: 10px 4px 4px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { transition: none !important; animation: none !important; }
+  .banner.show { visibility: hidden; }
+}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="top">
+    <div class="patch" id="patch">
+      <div class="glow" id="glow"></div>
+      <div class="lens">
+        <div class="stage">
+          <div class="swatch" id="swatch" role="img" aria-label="Resulting color"></div>
+          <div class="mine" id="mine"></div>
+        </div>
+      </div>
+      <div class="ripple"></div>
+      <button type="button" class="zoom" id="zoom" aria-pressed="false" aria-label="Zoom in on the dot's edge" inert>
+        <svg viewBox="0 0 18 18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round">
+          <circle cx="7.5" cy="7.5" r="5.2"/><path d="M11.4 11.4 16 16"/><path d="M5.3 7.5h4.4"/><path class="v" d="M7.5 5.3v4.4"/>
+        </svg>
+      </button>
+    </div>
+    <div class="wheel" id="wheel">
+      <span class="hair a"></span>
+      <span class="hair b"></span>
+      <div class="roll" id="roll" role="listbox" tabindex="0" aria-label="Bits per channel"></div>
+    </div>
+  </div>
+  <div class="lower">
+    <div class="chans" id="chans"></div>
+    <div class="actions" id="actions" inert>
+      <div class="actions-in">
+        <div class="actions-row">
+          <span class="tag" id="msg" aria-live="polite">Match the color</span>
+          <span class="btns">
+            <button type="button" class="btn ghost" id="quit">Quit</button>
+            <button type="button" class="btn primary" id="submit">Submit</button>
+          </span>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="settings" id="settings">
+  <button type="button" class="gear" id="gear" aria-label="Settings" aria-expanded="false" aria-controls="settingsPanel">
+    <svg viewBox="0 0 20 20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round">
+      <circle cx="10" cy="10" r="2.5"/><circle cx="10" cy="10" r="5.4"/>
+      <path d="M10 2.4v2.2M10 15.4v2.2M2.4 10h2.2M15.4 10h2.2M4.63 4.63l1.55 1.55M13.82 13.82l1.55 1.55M4.63 15.37l1.55-1.55M13.82 6.18l1.55-1.55"/>
+    </svg>
+  </button>
+  <div class="settings-panel" id="settingsPanel" role="dialog" aria-label="Settings" hidden>
+    <div class="settings-title">Settings</div>
+    <div class="setting">
+      <span class="setting-text">
+        <span class="setting-name" id="optResetName">Reset sliders to 0 after a match</span>
+        <span class="setting-note">In Play, each new round starts from black.</span>
+      </span>
+      <button type="button" class="switch" id="optReset" role="switch" aria-checked="false" aria-labelledby="optResetName"><span></span></button>
+    </div>
+  </div>
+</div>
+
+<div class="banner" id="banner" aria-hidden="true">
+  <div class="banner-text" id="bannerText"></div>
+</div>
+<canvas id="confetti" aria-hidden="true"></canvas>
+
+<script>
+(() => {
+  const DEPTHS = [1, 2, 4, 8];
+  const CHEV_L = '<svg viewBox="0 0 14 14" aria-hidden="true"><path d="M9 2.5 4.5 7 9 11.5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+  const CHEV_R = '<svg viewBox="0 0 14 14" aria-hidden="true"><path d="M5 2.5 9.5 7 5 11.5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+  const reduce = matchMedia("(prefers-reduced-motion: reduce)").matches;
+  const SMALL = matchMedia("(max-width: 600px)");
+
+  let bits = 2;
+  let vals = [2, 1, 2];              // channel values in steps (0 .. levels-1)
+  let fracs = [2 / 3, 1 / 3, 2 / 3]; // where each channel was last set, 0..1, so rolling the depth down and back up returns to it
+  let hueRef = fracs.slice();        // the color the Offset slider shifts up and down; set whenever a channel is moved
+  let offsetHold = null;               // position under the pointer (0..1) while the Offset slider is being dragged
+
+  const levels = () => 2 ** bits;
+  const max = () => levels() - 1;
+  const to8 = v => Math.round((v / max()) * 255);
+  const rgbStr = a => `rgb(${a[0]}, ${a[1]}, ${a[2]})`;
+  const levelOf = f => (f[0] + f[1] + f[2]) / 3; // plain average of the three channels
+  const actualLevel = () => levelOf(vals.map(v => v / max()));
+
+  // The reference color with the same amount added to (or taken from) every channel, so that the average
+  // lands on `target`. A channel stops at 0 or 1 while the others keep moving, so the amount is found by bisection.
+  function withOffset(ref, target) {
+    const shifted = d => ref.map(v => Math.max(0, Math.min(1, v + d)));
+    let lo = -1, hi = 1;
+    for (let i = 0; i < 30; i++) {
+      const d = (lo + hi) / 2;
+      if (levelOf(shifted(d)) < target) lo = d; else hi = d;
+    }
+    return shifted((lo + hi) / 2);
+  }
+  function applyOffset(target) {
+    fracs = withOffset(hueRef, target);
+    vals = fracs.map(f => Math.round(f * max()));
+  }
+  // One arrow press on Offset: creep in that direction until the color's average has actually moved that way
+  function stepOffset(dir) {
+    const start = actualLevel();
+    for (let i = 1; i <= 255; i++) {
+      const y = Math.max(0, Math.min(1, start + (dir * i) / 255));
+      applyOffset(y);
+      if ((actualLevel() - start) * dir > 1e-6 || y === 0 || y === 1) break;
+    }
+    fracs = vals.map(v => v / max()); // remember the color as shown, so changing depth starts from it
+  }
+  function setChannel(k, v) {
+    vals[k] = v;
+    fracs[k] = v / max();
+    hueRef = vals.map(x => x / max());
+  }
+
+  const ROWS = [
+    { id: "r", name: "Red",   color: v => [v, 0, 0], value: () => vals[0], set: v => setChannel(0, v) },
+    { id: "g", name: "Green", color: v => [0, v, 0], value: () => vals[1], set: v => setChannel(1, v) },
+    { id: "b", name: "Blue",  color: v => [0, 0, v], value: () => vals[2], set: v => setChannel(2, v) },
+    { id: "y", name: "Offset", continuous: true,
+      // 0..1. Follows the average of the three channels; while dragged the fader stays under the pointer
+      value: () => offsetHold !== null ? offsetHold : actualLevel(),
+      setOffset: (y, held) => { applyOffset(y); offsetHold = held ? y : null; },
+      step: stepOffset,
+      release: () => { offsetHold = null; fracs = vals.map(v => v / max()); } },
+  ];
+
+  // Rows
+  const chans = document.getElementById("chans");
+  const rows = ROWS.map(c => {
+    const row = document.createElement("div");
+    row.className = "chan";
+    row.innerHTML = `
+      <span class="chan-name" id="${c.id}-label">${c.name}</span>
+      <div class="stops" role="radiogroup" aria-labelledby="${c.id}-label"></div>
+      <span class="stepper">
+        <button type="button" class="arrow dec" id="${c.id}-dec" aria-label="Decrease ${c.name.toLowerCase()}">${CHEV_L}</button>
+        <span class="num" aria-live="polite"></span>
+        <button type="button" class="arrow inc" id="${c.id}-inc" aria-label="Increase ${c.name.toLowerCase()}">${CHEV_R}</button>
+      </span>`;
+    chans.appendChild(row);
+
+    const fill = document.createElement("span");
+    fill.className = "fill";
+    const halo = document.createElement("span");
+    halo.className = "halo";
+    const fader = document.createElement("span");
+    fader.className = "fader";
+
+    const r = {
+      c,
+      stops: row.querySelector(".stops"),
+      num: row.querySelector(".num"),
+      dec: row.querySelector(".dec"),
+      inc: row.querySelector(".inc"),
+      fill, halo, fader,
+      buttons: [],
+      on: -1, tab: -1,
+    };
+    const nearest = () => Math.max(0, Math.min(max(), Math.round(c.value())));
+
+    const set = (v, held) => {
+      v = Math.max(0, Math.min(max(), v));
+      if (v === c.value()) return;
+      c.set(v, held);
+      render();
+    };
+    const step = dir => {
+      if (c.step) { c.step(dir); render(); }
+      else set(nearest() + dir);
+    };
+
+    r.dec.addEventListener("click", () => step(-1));
+    r.inc.addEventListener("click", () => step(1));
+
+    // Click or drag across the row to pick a value
+    if (c.continuous) {
+      // No steps to draw: the rail, its lit part, and a fader, built once
+      r.stops.classList.add("cont");
+      r.stops.setAttribute("role", "slider");
+      r.stops.setAttribute("aria-valuemin", "0");
+      r.stops.setAttribute("aria-valuemax", "100");
+      r.stops.tabIndex = 0;
+      r.stops.innerHTML = '<span class="fill"></span><span class="fader"></span>';
+    }
+    const setCont = (y, held) => { c.setOffset(Math.max(0, Math.min(1, y)), held); render(); };
+
+    const pick = e => {
+      const rect = r.stops.getBoundingClientRect();
+      const vert = r.stops.classList.contains("vert");
+      const span = vert ? rect.height : rect.width;
+      const cell = span / levels();
+      const pos = vert ? rect.bottom - e.clientY : e.clientX - rect.left; // vertical runs bottom-up, like a fader
+      // The fader travels between where the first and last circles of the rows above sit
+      if (c.continuous) setCont((pos - cell / 2) / (span - cell), true);
+      else set(Math.floor(pos / cell), true);
+    };
+    r.stops.addEventListener("pointerdown", e => {
+      r.stops.setPointerCapture(e.pointerId);
+      if (c.continuous) r.stops.classList.add("dragging");
+      pick(e);
+      (c.continuous || !r.buttons.length ? r.stops : r.buttons[nearest()]).focus({ preventScroll: true });
+    });
+    r.stops.addEventListener("pointermove", e => {
+      if (r.stops.hasPointerCapture(e.pointerId)) pick(e);
+    });
+    const release = () => {
+      r.stops.classList.remove("dragging");
+      if (c.release) { c.release(); render(); }
+    };
+    r.stops.addEventListener("pointerup", release);
+    r.stops.addEventListener("pointercancel", release);
+    r.stops.addEventListener("keydown", e => {
+      const m = { ArrowLeft: -1, ArrowDown: -1, ArrowRight: 1, ArrowUp: 1 }[e.key];
+      if (m) { e.preventDefault(); step(m); }
+      else if (e.key === "Home") { e.preventDefault(); c.continuous ? setCont(0) : set(0); }
+      else if (e.key === "End") { e.preventDefault(); c.continuous ? setCont(1) : set(max()); }
+      else return;
+      if (!c.continuous && r.buttons.length) r.buttons[nearest()].focus();
+    });
+
+    return r;
+  });
+
+  const swatch = document.getElementById("swatch");
+  const glow = document.getElementById("glow");
+  const mine = document.getElementById("mine");
+  const patch = document.getElementById("patch");
+  const zoomBtn = document.getElementById("zoom");
+  let game = null;  // { level, depth, target, busy } while playing
+  let shown = null; // target color of the center dot while playing
+
+  function setBits(n) {
+    if (n === bits) return;
+    bits = n;
+    offsetHold = null;
+    vals = fracs.map(f => Math.round(f * max()));
+    buildStops();
+    render();
+  }
+
+  function buildStops() {
+    const n = levels();
+    rows.forEach(r => {
+      r.stops.closest(".chan").dataset.max = r.c.continuous ? 100 : max();
+      if (r.c.continuous) return;
+      r.stops.style.setProperty("--n", n);
+      r.stops.style.setProperty("--stagger", 240 / n + "ms");
+      r.buttons = [];
+      r.on = -1;
+      r.tab = -1;
+      // Phones skip individual stops past 8 values: the row becomes a bare rail
+      // (drag and tap still work from the pointer math; the big dot counts never exist)
+      const rail = SMALL.matches && n > 8;
+      r.stops.classList.toggle("rail", rail);
+      if (rail) { r.stops.replaceChildren(r.fill, r.fader); return; }
+      for (let i = 0; i < n; i++) {
+        const b = document.createElement("button");
+        b.type = "button";
+        b.className = "stop" + (i % 16 === 0 || i === n - 1 ? " major" : "");
+        b.tabIndex = -1;
+        b.setAttribute("role", "radio");
+        b.setAttribute("aria-checked", "false");
+        b.setAttribute("aria-label", String(i));
+        const d = document.createElement("span");
+        d.className = "dot";
+        d.style.setProperty("--i", i);
+        d.style.setProperty("--c", rgbStr(r.c.color(Math.round((i / max()) * 255))));
+        b.appendChild(d);
+        r.buttons.push(b);
+      }
+      r.stops.replaceChildren(r.fill, ...r.buttons, r.halo);
+    });
+    layout();
+  }
+
+  // Size circles to the space each value gets; fall back to ticks when they get too small
+  function layout() {
+    const n = levels();
+    const vert = SMALL.matches;
+    rows.forEach(r => {
+      r.stops.classList.toggle("vert", vert);
+      const span = vert ? r.stops.clientHeight : r.stops.clientWidth;
+      const cell = span / n;
+      if (r.c.continuous) { r.stops.style.setProperty("--cell", cell + "px"); return; }
+      if (r.stops.classList.contains("rail")) {
+        r.stops.classList.remove("ticks");
+        r.stops.style.setProperty("--cell", cell + "px");
+        r.stops.style.setProperty("--h", "18px");
+        return;
+      }
+      const d = Math.min(26, cell * 0.62);
+      r.stops.classList.toggle("ticks", d < 9);
+      r.stops.style.setProperty("--cell", cell + "px");
+      r.stops.style.setProperty("--d", d + "px");
+      r.stops.style.setProperty("--h", d * 1.3 + Math.min(12, cell * 0.25) + "px");
+      r.stops.style.setProperty("--tw", Math.max(1, Math.min(3, cell * 0.5)) + "px");
+    });
+  }
+  new ResizeObserver(layout).observe(chans);
+
+  function render() {
+    const c8 = vals.map(to8);
+    const color = rgbStr(c8);
+    swatch.style.backgroundColor = color;
+    glow.style.backgroundColor = color;
+    if (shown) mine.style.backgroundColor = shown;
+    swatch.setAttribute("aria-label", shown ? `Your color ${color}, target dot ${shown}` : "Resulting color " + color);
+
+    rows.forEach(r => {
+      if (r.c.continuous) {
+        const y = r.c.value();
+        const pct = Math.round(y * 100);
+        r.num.textContent = pct;
+        r.dec.disabled = y <= 1e-6;
+        r.inc.disabled = y >= 1 - 1e-6;
+        const g = Math.round(y * 255);
+        r.stops.style.setProperty("--y", y);
+        r.stops.style.setProperty("--glow", rgbStr([g, g, g]));
+        r.stops.setAttribute("aria-valuenow", pct);
+        return;
+      }
+      const val = r.c.value();
+      const n = Math.max(0, Math.min(max(), Math.round(val)));
+      r.num.textContent = n;
+      r.dec.disabled = val <= 1e-6;
+      r.inc.disabled = val >= max() - 1e-6;
+      r.stops.style.setProperty("--v", val);
+      r.stops.style.setProperty("--glow", rgbStr(r.c.color(Math.round((val / max()) * 255))));
+
+      if (!r.buttons.length) return; // rail mode: no per-stop bookkeeping
+      // A dot is enlarged only when the ring sits exactly on it
+      const on = Math.abs(val - n) < 0.02 ? n : -1;
+      if (r.on !== on) {
+        if (r.buttons[r.on]) r.buttons[r.on].classList.remove("on");
+        if (r.buttons[on]) r.buttons[on].classList.add("on");
+        r.on = on;
+      }
+      if (r.tab !== n) {
+        const prev = r.buttons[r.tab];
+        if (prev) { prev.setAttribute("aria-checked", "false"); prev.tabIndex = -1; }
+        r.buttons[n].setAttribute("aria-checked", "true");
+        r.buttons[n].tabIndex = 0;
+        r.tab = n;
+      }
+    });
+  }
+
+  // Bit-depth drum
+  const roll = document.getElementById("roll");
+  const GAME_DEPTHS = DEPTHS; // the game plays every depth in order
+  let depths = DEPTHS;        // what the drum lists
+  let items = [];
+  let cur = DEPTHS.indexOf(bits);
+  let dragged = false;
+  let playTimer = 0;
+
+  const itemH = () => items[0].el.offsetHeight;
+  const playIdx = () => depths.length; // Play is the entry after the last depth; rolling to it starts the match game
+  const clampIdx = i => Math.max(0, Math.min(playIdx(), i));
+
+  // Fill the drum with a list of depths plus Play, resting on the current depth (or on entry `at`)
+  function buildDrum(list, at) {
+    depths = list;
+    cur = Math.max(0, list.indexOf(bits));
+    const entry = (label, unit, i, id, cls) => {
+      const el = document.createElement("div");
+      el.className = "w-item" + cls;
+      el.id = id;
+      el.setAttribute("role", "option");
+      el.setAttribute("aria-selected", i === cur);
+      el.innerHTML = `<span class="n">${label}</span><span class="u">${unit}</span>`;
+      el.addEventListener("click", () => { if (!dragged) go(i); });
+      return { el, n: el.querySelector(".n"), u: el.querySelector(".u") };
+    };
+    items = list.map((n, i) => entry(n, `${n === 1 ? "bit" : "bits"} per channel`, i, "bits-" + n, ""));
+    items.push(entry("Play", "", list.length, "play", " play"));
+    roll.replaceChildren(...items.map(it => it.el));
+    roll.scrollTop = (at === undefined ? cur : at) * itemH();
+    paint();
+  }
+
+  function go(i, instant) {
+    roll.scrollTo({ top: clampIdx(i) * itemH(), behavior: instant || reduce ? "auto" : "smooth" });
+  }
+
+  // Curve each numeral around the drum by its distance from the center, and commit the nearest one
+  function paint() {
+    const h = itemH();
+    if (!h) return;
+    const pos = roll.scrollTop / h;
+    items.forEach((it, i) => {
+      const d = Math.max(-1.6, Math.min(1.6, i - pos));
+      const a = Math.min(1, Math.abs(d));
+      it.n.style.transform = `rotateX(${-d * 48}deg) scale(${1 - a * 0.42})`;
+      it.n.style.opacity = 1 - a * 0.58;
+      it.u.style.opacity = Math.max(0, 1 - Math.abs(d) * 3);
+    });
+    const idx = clampIdx(Math.round(pos));
+    if (idx === playIdx()) {
+      // Start once the drum has rested on Play for a moment
+      if (!game && !playTimer) {
+        playTimer = setTimeout(() => {
+          playTimer = 0;
+          if (!game && Math.round(roll.scrollTop / itemH()) === playIdx()) startGame();
+        }, 260);
+      }
+      return;
+    }
+    clearTimeout(playTimer);
+    playTimer = 0;
+    if (idx !== cur) {
+      items[cur].el.setAttribute("aria-selected", "false");
+      items[idx].el.setAttribute("aria-selected", "true");
+      cur = idx;
+      setBits(depths[idx]);
+    }
+  }
+
+  let raf = 0;
+  roll.addEventListener("scroll", () => {
+    if (!raf) raf = requestAnimationFrame(() => { raf = 0; paint(); });
+  }, { passive: true });
+
+  roll.addEventListener("keydown", e => {
+    if (game) return;
+    const m = { ArrowUp: -1, ArrowLeft: -1, ArrowDown: 1, ArrowRight: 1 }[e.key];
+    if (m) { e.preventDefault(); go(cur + m); }
+    if (e.key === "Home") { e.preventDefault(); go(0); }
+    if (e.key === "End") { e.preventDefault(); go(depths.length - 1); }
+  });
+
+  // Mouse drag (touch and trackpads already scroll it natively)
+  let drag = null;
+  roll.addEventListener("pointerdown", e => {
+    dragged = false;
+    if (e.pointerType !== "mouse" || e.button !== 0) return;
+    drag = { y: e.clientY, top: roll.scrollTop, moved: false };
+  });
+  window.addEventListener("pointermove", e => {
+    if (!drag) return;
+    const dy = e.clientY - drag.y;
+    if (!drag.moved && Math.abs(dy) > 4) {
+      drag.moved = true;
+      dragged = true;
+      roll.style.scrollSnapType = "none";
+      roll.classList.add("dragging");
+    }
+    if (drag.moved) roll.scrollTop = drag.top - dy;
+  });
+  window.addEventListener("pointerup", () => {
+    if (!drag) return;
+    const moved = drag.moved;
+    drag = null;
+    if (!moved) return;
+    roll.classList.remove("dragging");
+    go(Math.round(roll.scrollTop / itemH()));
+    setTimeout(() => { roll.style.scrollSnapType = ""; }, 380);
+  });
+
+  // Keep the chosen depth centered when the drum changes size
+  new ResizeObserver(() => { roll.scrollTop = cur * itemH(); paint(); }).observe(roll);
+
+  // Party pieces: confetti in the eight 1-bit colors (minus black), and the headline
+  const cv = document.getElementById("confetti");
+  const ctx = cv.getContext("2d");
+  const PARTY = ["#ff0000", "#00ff00", "#0000ff", "#00ffff", "#ff00ff", "#ffff00", "#ffffff"];
+  let parts = [];
+  let partyRaf = 0;
+  let DPR = 1;
+
+  // Size the canvas ahead of time: reallocating a fullscreen buffer mid-celebration IS the lag spike
+  function fitCanvas() {
+    DPR = SMALL.matches ? 1 : Math.min(2, window.devicePixelRatio || 1);
+    cv.width = Math.round(innerWidth * DPR);
+    cv.height = Math.round(innerHeight * DPR);
+  }
+  fitCanvas();
+  window.addEventListener("resize", fitCanvas);
+
+  function burst(x, y, count, power) {
+    if (reduce) return;
+    if (SMALL.matches) count = Math.round(count * 0.4); // phones get fewer pieces; nobody counts confetti
+    for (let i = 0; i < count; i++) {
+      const a = -Math.PI / 2 + (Math.random() - 0.5) * Math.PI * 1.6;
+      const s = power * (0.3 + Math.random() * 0.7);
+      parts.push({
+        x, y,
+        vx: Math.cos(a) * s,
+        vy: Math.sin(a) * s - power * 0.2,
+        w: 4 + Math.random() * 6, h: 3 + Math.random() * 4,
+        rot: Math.random() * 6.28, vr: (Math.random() - 0.5) * 0.4,
+        color: PARTY[i % PARTY.length],
+        round: Math.random() < 0.3,
+        life: 0, ttl: 70 + Math.random() * 60,
+      });
+    }
+    if (!partyRaf) partyRaf = requestAnimationFrame(tick);
+  }
+  function tick() {
+    ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+    ctx.clearRect(0, 0, innerWidth, innerHeight);
+    parts = parts.filter(p => p.life < p.ttl);
+    for (const p of parts) {
+      p.life++;
+      p.vy += 0.32;
+      p.vx *= 0.985; p.vy *= 0.985;
+      p.x += p.vx; p.y += p.vy;
+      p.rot += p.vr;
+      // one matrix assignment per piece instead of save/translate/rotate/scale/restore (5 state ops -> 1)
+      const c = Math.cos(p.rot), s = Math.sin(p.rot);
+      const sy = Math.cos(p.life * 0.25 + p.rot);
+      ctx.setTransform(DPR * c, DPR * s, -DPR * s * sy, DPR * c * sy, DPR * p.x, DPR * p.y);
+      ctx.globalAlpha = Math.min(1, (p.ttl - p.life) / 20);
+      ctx.fillStyle = p.color;
+      if (p.round) { ctx.beginPath(); ctx.arc(0, 0, p.w / 2, 0, 6.29); ctx.fill(); }
+      else ctx.fillRect(-p.w / 2, -p.h / 2, p.w, p.h);
+    }
+    ctx.globalAlpha = 1;
+    partyRaf = parts.length ? requestAnimationFrame(tick) : 0;
+  }
+  const centerOf = el => {
+    const b = el.getBoundingClientRect();
+    return [b.left + b.width / 2, b.top + b.height / 2];
+  };
+  const power = () => Math.max(9, innerHeight / 40);
+
+  const banner = document.getElementById("banner");
+  function showBanner(text) {
+    document.getElementById("bannerText").textContent = text;
+    banner.classList.remove("show");
+    void banner.offsetWidth;
+    banner.classList.add("show");
+  }
+
+  // Settings: kept in this browser only, and the page works the same if storage is unavailable
+  const settings = { resetAfterMatch: false };
+  try { Object.assign(settings, JSON.parse(localStorage.getItem("bits-per-channel-settings") || "{}")); } catch (e) {}
+  const saveSettings = () => {
+    try { localStorage.setItem("bits-per-channel-settings", JSON.stringify(settings)); } catch (e) {}
+  };
+  const settingsEl = document.getElementById("settings");
+  const gear = document.getElementById("gear");
+  const panel = document.getElementById("settingsPanel");
+  const optReset = document.getElementById("optReset");
+  const openSettings = on => {
+    panel.hidden = !on;
+    gear.setAttribute("aria-expanded", on);
+  };
+  optReset.setAttribute("aria-checked", settings.resetAfterMatch === true);
+  gear.addEventListener("click", () => openSettings(panel.hidden));
+  document.addEventListener("pointerdown", e => {
+    if (!panel.hidden && !settingsEl.contains(e.target)) openSettings(false);
+  });
+  optReset.addEventListener("click", () => {
+    settings.resetAfterMatch = !settings.resetAfterMatch;
+    optReset.setAttribute("aria-checked", settings.resetAfterMatch);
+    saveSettings();
+  });
+  // With the option on, a match sends every channel back to 0
+  function resetAfterMatch() {
+    if (!settings.resetAfterMatch) return;
+    fracs = [0, 0, 0];
+    hueRef = [0, 0, 0];
+    vals = [0, 0, 0];
+    offsetHold = null;
+    render();
+  }
+
+  // Match game: roll to Play, then mix the patch until the target dot in its center vanishes, one depth at a time
+  const root = document.documentElement;
+  const actions = document.getElementById("actions");
+  const msgEl = document.getElementById("msg");
+  const wheel = document.getElementById("wheel");
+  // Up to 4 bits a match must be exact. Past that single steps get too fine to see, so each channel
+  // may be off by about 8/255 of full range: 1 step at 5 bits, 2 at 6, 4 at 7, 8 at 8.
+  const tolerance = depth => Math.floor((8.5 * (2 ** depth - 1)) / 255);
+  const isMatch = (a, b, depth) => a.every((v, i) => Math.abs(v - b[i]) <= tolerance(depth));
+
+  // A random color at this depth that is clearly different from the player's current one
+  function newTarget(depth) {
+    const m = 2 ** depth - 1;
+    const now = fracs.map(f => Math.round(f * m));
+    const far = Math.max(1, m * 0.25);
+    let t;
+    do {
+      t = [0, 1, 2].map(() => Math.floor(Math.random() * (m + 1)));
+    } while (!t.some((v, i) => Math.abs(v - now[i]) >= far));
+    return t;
+  }
+
+  // Magnify the dot's edge to compare the two colors side by side; click the patch again to pop back out
+  function setZoom(on) {
+    patch.classList.toggle("zoomed", on);
+    zoomBtn.setAttribute("aria-pressed", on);
+    zoomBtn.setAttribute("aria-label", on ? "Zoom back out" : "Zoom in on the dot's edge");
+  }
+  patch.addEventListener("click", () => { if (game) setZoom(!patch.classList.contains("zoomed")); });
+
+  function rollTo(i) {
+    const g = game;
+    go(i);
+    setTimeout(() => {
+      if (game === g && Math.round(roll.scrollTop / itemH()) !== i) go(i, true);
+    }, 1100);
+  }
+
+  function setRound() {
+    const g = game;
+    const depth = GAME_DEPTHS[g.level];
+    const m = 2 ** depth - 1;
+    g.depth = depth;
+    g.target = newTarget(depth);
+    setZoom(false);
+    shown = rgbStr(g.target.map(v => Math.round((v / m) * 255)));
+    msgEl.textContent = "Match the color";
+    rollTo(g.level);
+    render();
+    setTimeout(() => { if (game === g) g.busy = false; }, 700);
+  }
+
+  function startGame() {
+    if (game) return;
+    drag = null;
+    roll.classList.remove("dragging");
+    roll.style.scrollSnapType = "";
+    game = { level: 0, busy: true };
+    root.classList.add("game");
+    actions.inert = false;
+    zoomBtn.inert = false;
+    burst(...centerOf(wheel), 170, power());
+    showBanner("Match the color");
+    setRound();
+  }
+
+  function endGame() {
+    if (!game) return;
+    game = null;
+    root.classList.remove("game");
+    actions.inert = true;
+    zoomBtn.inert = true;
+    setZoom(false);
+    // Let the dot shrink away before dropping its color
+    setTimeout(() => { if (!game) { shown = null; render(); } }, 720);
+  }
+
+  function submit() {
+    const g = game;
+    if (!g || g.busy || bits !== g.depth) return;
+    g.busy = true;
+    const ok = isMatch(vals, g.target, bits);
+    if (ok) {
+      // carry the matched color into the next depth as-is
+      fracs = vals.map(v => v / max());
+      hueRef = fracs.slice();
+    }
+    patch.classList.remove("hit", "miss");
+    void patch.offsetWidth;
+    patch.classList.add(ok ? "hit" : "miss");
+    if (!ok) {
+      msgEl.textContent = "Not a match";
+      // A loss ends the game and rolls the drum back to 1 bit
+      setTimeout(() => { if (game === g) { endGame(); go(0); } }, 1000);
+    } else if (g.level === GAME_DEPTHS.length - 1) {
+      msgEl.textContent = "All four matched";
+      burst(innerWidth / 2, innerHeight * 0.5, 260, power() * 1.15);
+      showBanner("Jackpot");
+      setTimeout(() => { if (game === g) { resetAfterMatch(); endGame(); } }, 2300);
+    } else {
+      msgEl.textContent = "Matched";
+      burst(...centerOf(patch), 46, power() * 0.7);
+      setTimeout(() => { if (game === g) { resetAfterMatch(); g.level++; setRound(); } }, 700);
+    }
+  }
+
+  document.getElementById("submit").addEventListener("click", submit);
+  document.getElementById("quit").addEventListener("click", endGame);
+  document.addEventListener("keydown", e => {
+    // While the settings panel is open, Escape closes it and the game shortcuts stand down
+    if (!panel.hidden) {
+      if (e.key === "Escape") { openSettings(false); gear.focus(); }
+      return;
+    }
+    if (!game) return;
+    if (e.key === "Escape") endGame();
+    if (e.key === "z" || e.key === "Z") setZoom(!patch.classList.contains("zoomed"));
+    if (e.key === "Enter" && !e.target.closest("#quit, #zoom")) { e.preventDefault(); submit(); }
+  });
+
+  SMALL.addEventListener("change", () => { buildStops(); render(); });
+
+  buildStops();
+  render();
+  buildDrum(DEPTHS);
+})();
+</script>
+</body>
+</html>
